@@ -1,0 +1,117 @@
+---
+title: "Homework 6"
+author: "Maya Sinha"
+date: "2022-11-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(janitor)
+library(tidymodels)
+library(ISLR)
+library(ISLR2)
+library(tidyverse)
+library(glmnet)
+library(ggplot2)
+library(corrplot)
+library(rpart.plot)
+tidymodels_prefer()
+```
+
+## Exercise 1
+##### Read in the data and set things up as in Homework 5:
+##### Use clean_names()
+##### Filter out the rarer Pokémon types
+##### Convert type_1 and legendary to factors
+##### Do an initial split of the data; you can choose the percentage for splitting. Stratify on the outcome variable.
+##### Fold the training set using v-fold cross-validation, with v = 5. Stratify on the outcome variable.
+##### Set up a recipe to predict type_1 with legendary, generation, sp_atk, attack, speed, defense, hp, and sp_def:
+#####      - Dummy-code legendary and generation;
+#####      - Center and scale all predictors.
+
+```{r q1}
+#read in csv
+pokemon_df <- read_csv("/Users/mayasinha/Desktop/PSTAT 131/homework-5/data/Pokemon.csv", show_col_types = FALSE)
+
+#clean names
+pokemon_df <- clean_names(pokemon_df)
+
+#filter out rarer types
+pokemon_df <- pokemon_df %>% filter(type_1 == "Bug" | type_1 == "Fire" | type_1 == "Grass" | type_1 == "Normal" | type_1 == "Water" | type_1 == "Psychic")
+
+#factor type_1, legendary, and generation
+pokemon_df$type_1 <- factor(pokemon_df$type_1, levels = c("Bug",  "Fire", "Grass",  "Normal", "Psychic", "Water"))
+pokemon_df$legendary <- factor(pokemon_df$legendary, levels = c("TRUE" , "FALSE"))
+#pokemon_df$generation <- factor(pokemon_df$generation, levels = c(1,2,3,4,5,6)) 
+  # ^included this in hw 5 but it actually makes the tree model loop infinitely
+
+#split data
+pokemon_split <- initial_split(pokemon_df, prop = .75, strata = type_1)
+pokemon_train <- training(pokemon_split)
+pokemon_test <- testing(pokemon_split)
+
+#v-fold cross validation, v = 5
+pokemon_fold <- vfold_cv(pokemon_train, v = 5, strata = type_1)
+
+#recipe
+pokemon_recipe <- recipe(type_1 ~ legendary + generation + sp_atk + attack + speed + defense + hp + sp_def, data = pokemon_train) %>%
+  step_dummy(all_nominal_predictors()) %>% 
+  step_normalize(all_predictors()) %>%
+  step_center(all_predictors()) %>% 
+  step_scale(all_predictors())
+```
+
+## Exercise 2
+##### Create a correlation matrix of the training set, using the corrplot package. Note: You can choose how to handle the continuous variables for this plot; justify your decision(s).
+
+```{r q2}
+
+pokemon_train %>% 
+  select(where(is.numeric)) %>% 
+  cor() %>% 
+  corrplot(type = "lower", diag = FALSE, method = 'color', main = 'Correlation Matrix of Pokemon Training Set')
+```
+##### What relationships, if any, do you notice? Do these relationships make sense to you?
+Attack, special attack, and special defense are all moderately correlated with total stats points (summary of how good the Pokemon is in battle). These relationships make sense because attacking and defending directly influences how a Pokemon performs in battle.
+
+## Exercise 3
+##### First, set up a decision tree model and workflow. Tune the cost_complexity hyperparameter. Use the same levels we used in Lab 7 – that is, range = c(-3, -1). Specify that the metric we want to optimize is roc_auc.
+```{r q3 tree model}
+tree_spec <- decision_tree() %>%
+  set_engine("rpart")
+
+class_tree_spec <- tree_spec %>%
+  set_mode("classification")
+
+class_tree_fit <- class_tree_spec %>%
+  fit(type_1 ~ legendary + generation + sp_atk + attack + speed + defense + hp + sp_def, data = pokemon_train)
+
+class_tree_fit %>%
+  extract_fit_engine() %>%
+  rpart.plot()
+
+class_tree_wf <- workflow() %>%
+  add_model(class_tree_spec %>% set_args(cost_complexity = tune())) %>%
+  add_formula(type_1 ~ legendary + generation + sp_atk + attack + speed + defense + hp + sp_def)
+
+param_grid <- grid_regular(cost_complexity(range = c(-3, -1)), levels = 10)
+
+tune_res <- tune_grid(
+  class_tree_wf,
+  resamples = pokemon_fold,
+  grid = param_grid,
+  metrics = metric_set(roc_auc)
+  )
+
+
+```
+
+##### Print an autoplot() of the results. What do you observe? Does a single decision tree perform better with a smaller or larger complexity penalty?
+The single decision tree performs better with a smaller complexity penalty. 
+
+```{r q3 autoplot}
+autoplot(tune_res)
+```
+
+
